@@ -1,22 +1,14 @@
+const urlModel = require('../Model/UrlModel');
+const redis = require('redis');
+const { promisify }  = require('util');
 
-const validUrl = require('valid-url')
-
- 
-const urlModel = require("../Model/urlModel");
-const shortId = require("shortid");
-const { response } = require("express");
-
-const redis = require("redis");
-
-const { promisify } = require("util");
-
-//Connect to redis
 const redisClient = redis.createClient(
-    19583,
-    "redis-19583.c264.ap-south-1-1.ec2.cloud.redislabs.com",
-    { no_ready_check: true }
+    10118,
+    "redis-10118.c212.ap-south-1-1.ec2.cloud.redislabs.com",
+    { no_ready_check : true }
 );
-redisClient.auth("jNaSKPRAwt9PNonuiu5pKiEAsOJ3moYV", function (err) {
+
+redisClient.auth("5jOEoWx8gMK79oGVQMkNayzQ0zCb5qTH", function (err) {
     if (err) throw err;
 });
 
@@ -24,116 +16,103 @@ redisClient.on("connect", async function () {
     console.log("Connected to Redis..");
 });
 
-//1. connect to the server
-//2. use the commands :
-
-//Connection setup for redis
-
-const SET_ASYNC = promisify(redisClient.SET).bind(redisClient);
+const SET_ASYNC = promisify(redisClient.SETEX).bind(redisClient);
 const GET_ASYNC = promisify(redisClient.GET).bind(redisClient);
 
-const isValid = function (value) {
-    if (typeof value === "undefined" || value === null) return false;
-    if (typeof value === "string" && value.trim().length === 0) return false;
-    return true;
-};
+const shortenURL = async function(req,res)
+{
+    try
+    {
+        if(Object.keys(req.body).length!=1)
 
-const isValidRequestBody = function (requestBody) {
-    return Object.keys(requestBody).length == 1;
-};
+            return res.status(400).send({status : false, message : "Please provide data or provide only one longurl"});
 
+        if(req.body.longUrl==undefined&&typeof(req.body.longUrl)!='string')
 
-const shortenUrl = async function (req, res) {
-    try {
-        if (!isValidRequestBody(req.body)) {
-            return res.status(400).send({ status: false, message: "Please provide data or provide only one longurl" })
-        }
-        let { longUrl } = req.body
-        if (!isValid(longUrl)) {
-            return res.status(400).send({ status: false, message: "Please provide longUrl" })
-        }
-        if (!validUrl.isUri(longUrl)) {
-            return res.status(400).send({ status: false, messege: 'Invalid  URL' })
-        }
-         const findInCache = await GET_ASYNC(`${longUrl}`);
-        if (findInCache) {
-            let data = JSON.parse(findInCache);
-            return res
-                .status(200)
-                .send({ status: true, message: "Entry from cache", shortUrl: data.shortUrl });
-        }
-        const isAlreadyReg = await urlModel
-            .findOne({ longUrl })
-            .select({ _id:0,createdAt: 0, updatedAt: 0, __v: 0 });
-        if (isAlreadyReg) {
-            await SET_ASYNC(`${longUrl}`, JSON.stringify(isAlreadyReg));
-            res
-                .status(409)
-                .send({
-                    status: false,
-                    message: `URL data already generated`,
-                    data: isAlreadyReg,
-                });
-        } else {
-            const urlCode = shortId.generate(longUrl);
-            let checkUrlCode = await urlModel.findOne({ urlCode: urlCode });
-            if (checkUrlCode) {
-                return res.status(400)
-                    .send({
-                        status: false,
-                        message: `URL data already generated`,
-                    })
-            }
+            return res.status(400).send({status : false, message : "originalUrl is required and should be  a string."});
 
-            const shortUrl = `http://localhost:3000/${urlCode}`;
-            const data = {};
-            data["longUrl"] = longUrl;
-            data["shortUrl"] = shortUrl;
-            data["urlCode"] = urlCode;
+        if(/^(http:\/\/www\.|https:\/\/www\.|http:\/\/|https:\/\/)?[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(:[0-9]{1,5})?(\/.*)?$/.test(req.body.originalURL))
+        
+            return res.status(400).send({ status: false, message : "The given originalUrl is not valid URL!"});
 
-            let profile = await urlModel.create(data);
-            await SET_ASYNC(`${longUrl}`, JSON.stringify(profile));
-            await SET_ASYNC(`${urlCode}`, JSON.stringify(profile));
-            let profile1=await urlModel.findOne({urlCode:urlCode}).select({ _id:0,createdAt: 0, updatedAt: 0, __v: 0 })
-            res.status(201).send({ status:true,data: profile1 });
+        const longUrl = req.body.longUrl;
+
+        let cachedUrlData = JSON.parse(await GET_ASYNC(`${longUrl}`));
+
+        if(cachedUrlData)
+        {
+            return res.status(200).send({status : true, message : "cache hit", data : { longUrl : cachedUrlData.longUrl, shortUrl : cachedUrlData.shortUrl, urlCode : cachedUrlData.urlCode }});
         }
-    } catch (err) {
-        console.log(err.message);
-        res.status(500).send({ msg: "Some error occured" });
+
+        let urlExists = await urlModel.findOne({longUrl});
+
+        if(urlExists)
+        {
+            await SET_ASYNC(`${longUrl}`,120,JSON.stringify(urlExists));
+            return res.status(200).send({status : true, message : "from db", data : { longUrl : urlExists.longUrl, shortUrl : urlExists.shortUrl, urlCode : urlExists.urlCode }});
+        }
+
+        let characters = 'ABCDEFGHIJKLMNOPQRSTUWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        
+        let length = 5;
+        
+        let urlCode = '';
+        
+        for(let i=0;i<length;++i)
+
+            urlCode+=characters.charAt(Math.floor(Math.random()*characters.length));
+
+        const shortUrl = "http://localhost:3000/"+urlCode;
+
+        const urlData = { longUrl, shortUrl, urlCode };
+
+        await urlModel.create(urlData);
+
+        await SET_ASYNC(`${longUrl}`,120,JSON.stringify(urlData));
+
+        return res.status(201).send({status : true, data : urlData});
+            
+    }
+    catch(error)
+    {
+        return res.status(500).send({ status : false, message : error.message });   
     }
 };
 
-const redirectUrl = async function (req, res) {
-    try {
-        const urlData = req.params.urlCode;
+const getURL = async function(req,res)
+{
+    try
+    {
+        const urlCode = req.params.urlCode;
 
-        const urlCode = urlData
-            .split("")
-            .map((a) => a.trim())
-            .join("");
+        if(!urlCode)
 
-        let cachedUrlDataTwo = await GET_ASYNC(`${urlCode}`);
-        let cachedUrlDataThree = JSON.parse(cachedUrlDataTwo);
-        if (cachedUrlDataThree) {
-            res.redirect(307, cachedUrlDataThree["longUrl"]);
-        } else {
-            let validData = await urlModel
-                .findOne({ urlCode: urlCode })
-                .select({ longUrl: 1 });
+            return res.status(400).send({status : false, message : "Invalid request parameter. Please provide urlCode"});
 
-            if (!validData) {
-                return res
-                    .status(404)
-                    .send({ status: false, message: "url not found " });
-            }
+        if((urlCode.length!=5)&&!(/[^-]\w{5}/.test(urlCode)))
 
-            await SET_ASYNC(`${urlCode}`, JSON.stringify(validData));
-            res.redirect(307, validData.longUrl);
-        }
-    } catch (err) {
-        res.status(500).send({ status: false, message: err.message });
+            return res.status(400).send({status : false, message : "The given urlCode is invalid."});
+        
+        let cachedUrlData = JSON.parse(await GET_ASYNC(`${req.params.urlCode}`));
+
+        if(cachedUrlData)
+
+            return res.redirect(301,cachedUrlData.longUrl);
+
+        const originalURL = await urlModel.findOne({urlCode});
+
+        if(!originalURL)
+
+            return res.status(404).send({status : false, message : "URL not found !"});
+
+        await SET_ASYNC(`${urlCode}`,120,JSON.stringify(originalURL));
+
+        return res.redirect(301,originalURL.longUrl);
+    }
+    catch(error)
+    {
+        return res.status(500).send({ status : false, message : error.message });   
     }
 };
 
-module.exports.shortenUrl = shortenUrl;
-module.exports.redirectUrl = redirectUrl;
+module.exports={shortenURL,getURL};
