@@ -78,10 +78,10 @@ const shortenUrl = async function (req, res) {
             const urlCode = shortId.generate(longUrl);
             let checkUrlCode = await urlModel.findOne({ urlCode: urlCode });
             if (checkUrlCode) {
-                return res.status(400)
+                return res.status(409)
                     .send({
                         status: false,
-                        message: `URL data already generated`,
+                        message: `URLcode data already generated`,
                     })
             }
 
